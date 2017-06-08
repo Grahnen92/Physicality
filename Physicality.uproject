@@ -1,0 +1,16 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "{E67A32EC-4741-F8DB-068A-CD8270EE1B60}",
+	"Category": "",
+	"Description": "",
+	"Modules": [
+		{
+			"Name": "Physicality",
+			"Type": "Runtime",
+			"LoadingPhase": "Default",
+			"AdditionalDependencies": [
+				"Engine"
+			]
+		}
+	]
+}
