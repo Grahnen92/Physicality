@@ -1030,23 +1030,6 @@ void APhysicsFighter::setNormalStanceTargets()
 	{
 		alr->next->target.twist_dir = tmp_twist;
 	}
-		
-	DrawDebugLine(
-		GetWorld(),
-		alr->next->state.pos,
-		alr->next->state.pos + alr->next->target.twist_dir*100.f,
-		FColor(255, 0, 0),
-		false, -1, 0,
-		3.f
-	);
-	DrawDebugLine(
-		GetWorld(),
-		alr->next->state.pos,
-		alr->next->state.pos + alr->next->state.forward*100.f,
-		FColor(0, 0, 255),
-		false, -1, 0,
-		3.f
-	);
 
 	
 	if (!char_states.fight_mode) {
@@ -1163,7 +1146,6 @@ void APhysicsFighter::weaponGrabControl(float DeltaTime, FBodyInstance* BodyInst
 	tmp_shaft->AddForce(wgc.adjustment*(mass), false);
 	////weapon rotation --------------------------------------------------------------
 	wgdc.error.X = 1.f - FVector::DotProduct(alr->next->state.up, gwep_states.up);
-	UE_LOG(LogTemp, Warning, TEXT("wgdc.error.X  %f"), wgdc.error.X);
 	FVector rot_ref = FVector::CrossProduct(gwep_states.up, alr->next->state.up);
 	rot_ref = rot_ref.GetSafeNormal();
 
