@@ -9,10 +9,10 @@
 #include "Runtime/Engine/Classes/Particles/ParticleSystemComponent.h"
 #include "Runtime/Engine/Classes/Components/DecalComponent.h"
 #include "Runtime/Engine/Classes/Components/AudioComponent.h"
-#include "Runtime/Engine/Classes/Kismet/GameplayStatics.h"
-#include "Runtime/CoreUObject/Public/UObject/ConstructorHelpers.h"
 
-//#include "Weapon.h" //TODO: WEP
+#include "Runtime/Engine/Classes/Components/SkeletalMeshComponent.h"
+
+#include "weapons/Weapon.h" //TODO: WEP
 
 #include "CoreMinimal.h"
 #include "GameFramework/Pawn.h"
@@ -89,7 +89,7 @@ struct FLimbState
 {
 	GENERATED_USTRUCT_BODY()
 
-		FVector pos;
+	FVector pos;
 	FVector forward;
 	FVector right;
 	FVector up;
@@ -112,8 +112,8 @@ struct FLimbNode
 {
 	GENERATED_USTRUCT_BODY()
 
-		FBodyInstance* bi;
-	FLimbNode* next;
+	FBodyInstance* bi;
+	FLimbNode* next = nullptr;
 
 	FLimbState state;
 
@@ -131,6 +131,8 @@ struct FPFStates
 	bool mortal = true;
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CharacterStates")
 	bool alive = true;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CharacterStates")
+	float impact_resistance = 10000.f;
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CharacterStates")
 	bool can_move = true;
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CharacterStates")
@@ -214,6 +216,8 @@ class PHYSICALITY_API APhysicsFighter : public APawn
 public:
 	// Sets default values for this pawn's properties
 	APhysicsFighter();
+	// Sets default values for this pawn's properties
+	~APhysicsFighter();
 
 protected:
 
@@ -243,8 +247,6 @@ protected:
 	UStaticMeshComponent* grip_vis;
 	UPROPERTY(Category = "Weapon", VisibleAnywhere, BlueprintReadWrite)
 	UPhysicsConstraintComponent* grip_attachment;
-	UPROPERTY(Category = "Weapon", VisibleAnywhere, BlueprintReadWrite)
-	UPhysicsConstraintComponent* wep_attachment;
 
 	UPROPERTY(Category = "Weapon", VisibleAnywhere, BlueprintReadWrite)
 	UDecalComponent* grip_indicator_decal;
@@ -281,7 +283,6 @@ protected:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	FPFWeaponStates arm_states;
-	TArray<FBodyInstance*> arm_BIs;
 	
 	UFUNCTION()
 	void addPotentialTarget(UPrimitiveComponent* OverlappedComp, AActor* OtherActor, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult);
@@ -317,13 +318,13 @@ protected:
 
 	void fightModeOn();
 	void fightModeOff();
-	//void release(); TODO: WEAPON
-	//void grab(); TODO: WEAPON
-	//void abortGrab();
-	//UFUNCTION(BlueprintCallable)
-	//void attachWeapon(AWeapon* _wep); TODO: WEAPON
-	//AWeapon* held_weapon; TODO: WEAPON
-	//UObject* held_object; TODO: WEAPON
+	void release();// TODO: WEAPON
+	void grab();// TODO: WEAPON
+	void abortGrab();
+	UFUNCTION(BlueprintCallable)
+	void attachWeapon(AWeapon* _wep); //TODO: WEAPON
+	AWeapon* held_weapon;// TODO: WEAPON
+	UObject* held_object; //TODO: WEAPON
 	
 	void guard();
 	void abortGuard();
@@ -373,17 +374,13 @@ public:
 
 	//WEAPON -----------------------------------------------------------------
 
-	//arm joint direction controllers(plural)
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	TArray<FPIDData2D> ajdc;
-	//arm joint direction targets(plural)
-	TArray<FLimbTarget> ajdc_targets;
-	//arm_twist_controller
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	FPIDData atc;
-	//weapon_twist_controller
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	FPIDData wtc;
+	//arm limb root
+	FLimbNode* alr = nullptr;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ArmPID")
+	FPIDData3D upper_arm_controller;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ArmPID")
+	FPIDData3D hand_controller;
+
 	//weapon_grab_direction_controller
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	FPIDData2D wgdc;
@@ -391,31 +388,11 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	FPIDData3D wgc;
 
-	//arm body instance states
-	TArray<FLimbState> abis;
+	FLimbState gwep_states;
 
 	//general variables used across several function
-	FVector weapon_twist_solder;
-	FVector weapon_twist_target;
-
-	FVector ga_pos;
-	FVector ga_forward;
-	FVector ga_right;
-	FVector ga_up;
-	FVector ga_prev_up;
-
-	FVector g_pos;
-	FVector g_pos_offset;
-	FVector g_forward;
-	FVector g_right;
-	FVector g_up;
-	FVector g_prev_up;
-
-	FVector current_griph_xydir;
-
-	FVector w_pos;
-	FVector w_up;
-	FVector w_prev_up;
+	FVector hand_solder;
+	FVector hand_solder_dir;
 
 	//Movement control --------------------------------------------------------------
 	//hover height controller
@@ -478,30 +455,26 @@ protected:
 	void OnBodyHit(UPrimitiveComponent* HitComp, AActor* OtherActor, UPrimitiveComponent* OtherComp, FVector NormalImpulse, const FHitResult& Hit);
 
 	//CONTROL FUNCTIONS =================================================================================
-	void initInputVars();
 	void setNormalStanceTargets();
 	void setGuardingStanceTargets();
 	void setDisabledStanceTargets();
-	void setArmTwistTargets();
 
-	FCalculateCustomPhysics OnCalculateCustomHoverPhysics; //HOVER
+	FCalculateCustomPhysics OnCalculateCustomHoverPhysics; 
 	void customHoverPhysics(float DeltaTime, FBodyInstance* BodyInstance);
-	FCalculateCustomPhysics OnCalculateControlGripPhysics; //GRIP
-	void ControlGripPhysics(float DeltaTime, FBodyInstance* BodyInstance);
-	FCalculateCustomPhysics OnCalculateControlArmJointDirectionPhysics; //GRIP POSITION
-	void ControlArmJointDirectionPhysics(float DeltaTime, FBodyInstance* BodyInstance);
-	FCalculateCustomPhysics OnCalculateControlArmTwistPhysics; // WEAPON TWist
-	void ControlArmTwistPhysics(float DeltaTime, FBodyInstance* BodyInstance);
-	FCalculateCustomPhysics OnCalculateControlWeaponTwistPhysics; // WEAPON TWist
-	void ControlWeaponTwistPhysics(float DeltaTime, FBodyInstance* BodyInstance);
-	FCalculateCustomPhysics OnCalculateWeaponGrabControl; // WEAPON Grabbing
-	void weaponGrabControl(float DeltaTime, FBodyInstance* BodyInstance);
-	FCalculateCustomPhysics OnCalculateCustomInitGripPhysics;
-	void customInitGripPhysics(float DeltaTime, FBodyInstance* BodyInstance);
+
 	FCalculateCustomPhysics CalculateControlBody;
 	void ControlBody(float DeltaTime, FBodyInstance* BodyInstance);
+	
+	FCalculateCustomPhysics CalculateControlArm; 
+	void ControlArm(float DeltaTime, FBodyInstance* BodyInstance);
+	
+	FCalculateCustomPhysics OnCalculateWeaponGrabControl; 
+	void weaponGrabControl(float DeltaTime, FBodyInstance* BodyInstance);
+	
+
 
 	void updateLimbStates(FLimbNode* limb);
+	void updateArmLimbStates(FLimbNode* limb);
 	void ControlLimb(float DeltaTime, FLimbNode* limb);
 
 	void controlCameraDirection(float DeltaTime);

@@ -1,7 +1,10 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
 #include "PhysicsFighter.h"
-
+#include "DrawDebugHelpers.h"
+#include "Runtime/Engine/Classes/Kismet/GameplayStatics.h"
+#include "Runtime/CoreUObject/Public/UObject/ConstructorHelpers.h"
+#include "gameModes/FightModeBase.h"
 
 // Sets default values
 APhysicsFighter::APhysicsFighter()
@@ -15,15 +18,28 @@ APhysicsFighter::APhysicsFighter()
 	constructWeapon();
 	constructCamera();
 }
+APhysicsFighter::~APhysicsFighter()
+{
+	if (alr) {
+		delete alr->next;
+		delete alr;
+	}
+	if(upbr.next)
+		delete upbr.next;
+	if (rlr.next)
+		delete rlr.next;
+	if (llr.next)
+		delete llr.next;
+}
 
 void APhysicsFighter::constructBody()
 {
 	skeleton = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("Body"));
 	skeleton->SetupAttachment(RootComponent);
-	static ConstructorHelpers::FObjectFinder<USkeletalMesh>  sm_object(TEXT("/Game/PhysicsFighter/skeletalMeshes/featherBotNoArm.featherBotNoArm"));
+	static ConstructorHelpers::FObjectFinder<USkeletalMesh>  sm_object(TEXT("/Game/PhysicsFighter/skeletalMeshes/featherBotNoArm"));
 	skeleton->SetSkeletalMesh(sm_object.Object);
 	//body->SetPhysicsAsset(jointSKeletalMesh.Object->PhysicsAsset);
-	//body->SetSimulatePhysics(true);
+	//skeleton->SetSimulatePhysics(true);
 
 	dash_trail = CreateDefaultSubobject<UParticleSystemComponent>(TEXT("BodyTrail"));
 	dash_trail->SetupAttachment(skeleton, FName("Spine02"));
@@ -62,10 +78,6 @@ void APhysicsFighter::constructWeapon()
 	grip_attachment = CreateDefaultSubobject<UPhysicsConstraintComponent>(TEXT("GripAttachment"));
 	grip_attachment->SetupAttachment(grip);
 	grip_attachment->SetRelativeLocation(FVector(0.f, 0.f, 0.f));
-
-	wep_attachment = CreateDefaultSubobject<UPhysicsConstraintComponent>(TEXT("WeaponAttachment"));
-	wep_attachment->SetupAttachment(grip);
-	wep_attachment->SetRelativeLocation(FVector(0.f, 0.f, 0.f));
 
 	grip_indicator_decal = CreateDefaultSubobject<UDecalComponent>(TEXT("GripIndicatorDecal"));
 	grip_indicator_decal->SetupAttachment(grip);
@@ -198,6 +210,16 @@ void APhysicsFighter::initCustomPhysics()
 	torsoBI = skeleton->GetBodyInstance(FName("Spine02"));
 
 	//pelvis
+	alr = new FLimbNode;
+	alr->bi = grip_axis->GetBodyInstance();
+	alr->pid = &upper_arm_controller;
+	//torso
+	alr->next = new FLimbNode;
+	alr->next->bi = grip->GetBodyInstance();
+	alr->next->pid = &hand_controller;
+	alr->next->next = nullptr;
+
+	//pelvis
 	upbr.bi = skeleton->GetBodyInstance(FName("Spine01"));
 	upbr.pid = &pelvis_controller;
 	//torso
@@ -224,15 +246,14 @@ void APhysicsFighter::initCustomPhysics()
 	llr.next->pid = &left_shin_controller;
 	llr.next->next = nullptr;
 
-	OnCalculateControlGripPhysics.BindUObject(this, &APhysicsFighter::ControlGripPhysics);
-	OnCalculateCustomInitGripPhysics.BindUObject(this, &APhysicsFighter::customInitGripPhysics);
-	OnCalculateControlArmJointDirectionPhysics.BindUObject(this, &APhysicsFighter::ControlArmJointDirectionPhysics);
-	OnCalculateControlWeaponTwistPhysics.BindUObject(this, &APhysicsFighter::ControlWeaponTwistPhysics);
-	OnCalculateControlArmTwistPhysics.BindUObject(this, &APhysicsFighter::ControlArmTwistPhysics);
-	OnCalculateWeaponGrabControl.BindUObject(this, &APhysicsFighter::weaponGrabControl);
+	gwep_states.up = FVector::ZeroVector;
+	gwep_states.prev_up = FVector::ZeroVector;
 
 	CalculateControlBody.BindUObject(this, &APhysicsFighter::ControlBody);
 	OnCalculateCustomHoverPhysics.BindUObject(this, &APhysicsFighter::customHoverPhysics);
+
+	CalculateControlArm.BindUObject(this, &APhysicsFighter::ControlArm);
+	OnCalculateWeaponGrabControl.BindUObject(this, &APhysicsFighter::weaponGrabControl);
 
 	skeleton->OnComponentHit.AddDynamic(this, &APhysicsFighter::OnBodyHit);
 	targeting_aura->OnComponentBeginOverlap.AddDynamic(this, &APhysicsFighter::addPotentialTarget);
@@ -246,35 +267,9 @@ void APhysicsFighter::initPIDs()
 	arm_target_rot = FRotator(-35.f, 0.f, 0.f);
 	target_arm_length = 500.f;
 
-	//arm and weapon ------------------------------------------------
-	ajdc_targets.SetNum(2);
-	ajdc_targets[0].dir = FVector::UpVector;
-	ajdc_targets[0].prev_dir_xy = FVector::ForwardVector;
 
-	ajdc_targets[1].dir = FVector::UpVector;
-	ajdc_targets[1].prev_dir = FVector::ForwardVector;
-	ajdc_targets[1].prev_dir_xy = FVector::ForwardVector;
 
-	weapon_twist_solder = FVector::UpVector;
-	weapon_twist_target = FVector::RightVector;
-
-	arm_BIs.Add(grip_axis->GetBodyInstance());
-	arm_BIs.Add(grip->GetBodyInstance());
-
-	abis.SetNum(arm_BIs.Num());
-	abis[0].prev_up = FVector::UpVector;
-	abis[1].prev_up = FVector::UpVector;
-
-	//grip_axis_bi = grip_axis->GetBodyInstance();
-	//grip_bi = grip->GetBodyInstance();
-	g_pos_offset = FVector::ZeroVector;
-
-	ga_prev_up = FVector::ZeroVector;
-	g_prev_up = FVector::ZeroVector;
-	w_prev_up = FVector::ZeroVector;
-	//weapon_handle_2_bi = weapon_handle_2->GetBodyInstance();
-
-	//grabbing  ------------------------------------------------
+	hand_solder = FVector::UpVector;
 
 }
 
@@ -287,26 +282,17 @@ void APhysicsFighter::Tick(float DeltaTime)
 	if (char_states.alive)
 	{
 		camera_axis->SetWorldLocation(torsoBI->GetCOMPosition() + FVector::UpVector*40.f);
-		//grip_axis->SetWorldLocation(torso->GetCenterOfMass() + FVector(0.f, 0.f, -15.f));
-		//grip_axis_bi->SetBodyTransform(FTransform(torso_bi->GetCOMPosition() + FVector(0.f, 0.f, -15.f)), true);
 
-
-		arm_BIs[1]->AddCustomPhysics(OnCalculateControlGripPhysics);
-
-		if (!arm_states.holding_weapon)
-		{
-			gripIndicatorCalculations(DeltaTime);
-		}
-
+		alr->bi->AddCustomPhysics(CalculateControlArm); //TODO: this function makes PhysicsCharacter despawn when build is packaged
+		torsoBI->AddCustomPhysics(CalculateControlBody); //TODO: this function makes PhysicsCharacter despawn when build is packaged
 		torsoBI->AddCustomPhysics(OnCalculateCustomHoverPhysics);
-		torsoBI->AddCustomPhysics(CalculateControlBody);
-
+		
 		if (char_states.can_move)
-		{
 			movementCalculations(DeltaTime);
-		}
+		
+		if (!arm_states.holding_weapon)
+			gripIndicatorCalculations(DeltaTime);
 	}
-
 }
 
 void APhysicsFighter::cameraCalculations(float DeltaTime)
@@ -410,6 +396,10 @@ void APhysicsFighter::movementCalculations(float DeltaTime)
 			torsoBI->AddForce(target_direction*dash_data.force*DeltaTime);
 			dash_data.force_timer += DeltaTime;
 		}
+		else
+		{
+
+		}
 
 		dash_data.cd_timer += DeltaTime;
 		dash_trail->SetFloatParameter(FName("trailLifetime"), FMath::Lerp(1.0f, 0.0f, dash_data.cd_timer / dash_data.cd));
@@ -456,7 +446,7 @@ void  APhysicsFighter::gripIndicatorCalculations(float DeltaTime)
 	//Re-initialize hit info
 	FHitResult rv_hit(ForceInit);
 
-	FVector start = g_pos;
+	FVector start = alr->next->state.pos;
 	FVector end = start - FVector::UpVector*200.f;
 
 	//call GetWorld() from within an actor extending class
@@ -470,12 +460,12 @@ void  APhysicsFighter::gripIndicatorCalculations(float DeltaTime)
 	{
 		grip_indicator_decal->SetVisibility(true);
 		grip_indicator_decal->SetWorldLocation(rv_hit.Location);
-		grip_indicator_beam->SetBeamTargetPoint(0, g_pos - FVector::UpVector*rv_hit.Distance, 0);
+		grip_indicator_beam->SetBeamTargetPoint(0, alr->next->state.pos - FVector::UpVector*rv_hit.Distance, 0);
 
 	}
 	else
 	{
-		grip_indicator_beam->SetBeamTargetPoint(0, g_pos - FVector::UpVector*200.f, 0);
+		grip_indicator_beam->SetBeamTargetPoint(0, alr->next->state.pos - FVector::UpVector*200.f, 0);
 		grip_indicator_decal->SetVisibility(false);
 	}
 
@@ -527,48 +517,49 @@ bool APhysicsFighter::isGuarding()
 
 void APhysicsFighter::OnBodyHit(UPrimitiveComponent* HitComp, AActor* OtherActor, UPrimitiveComponent* OtherComp, FVector NormalImpulse, const FHitResult& Hit)
 {
-	//if (mortal)
-	//{
-	//	if (OtherActor != this)
-	//	{
-	//		AWeapon* other_weapon = Cast<AWeapon>(OtherActor);
-	//		if (other_weapon && other_weapon != held_weapon)
-	//		{
-	//			if (NormalImpulse.Size() > 10000.f)
-	//			{
+	if (char_states.mortal)
+	{
+		if (OtherActor != this)
+		{
+
+			AWeapon* other_weapon = Cast<AWeapon>(OtherActor);
+			if (other_weapon && other_weapon != held_weapon)
+			{
+				if (NormalImpulse.Size() > char_states.impact_resistance)
+				{
 
 
-	//				release();
+					release();
 
-	//				//body->BreakConstraint(FVector::ZeroVector, FVector::ZeroVector, Hit.BoneName);
-	//				FHitResult other_hit;
-	//				Hit.GetReversedHit(other_hit);
-	//				FConstraintInstance* tmp_const = body->FindConstraintInstance(other_hit.BoneName);
-	//				if (tmp_const)
-	//				{
-	//					//tmp_const->TermConstraint();
-	//					body->BreakConstraint(FVector::ZeroVector, FVector::ZeroVector, other_hit.BoneName);
-	//				}
+					//body->BreakConstraint(FVector::ZeroVector, FVector::ZeroVector, Hit.BoneName);
+					FHitResult other_hit;
+					Hit.GetReversedHit(other_hit);
+					FConstraintInstance* tmp_const = skeleton->FindConstraintInstance(other_hit.BoneName);
+					if (tmp_const)
+					{
+						//tmp_const->TermConstraint();
+						skeleton->BreakConstraint(FVector::ZeroVector, FVector::ZeroVector, other_hit.BoneName);
+					}
 
 
-	//				alive = false;
-	//				fight_mode = false;
-	//				body->OnComponentHit.RemoveAll(this);
+					char_states.alive = false;
+					char_states.fight_mode = false;
+					skeleton->OnComponentHit.RemoveAll(this);
 
-	//				AFightModeBase* tmp_mode = Cast<AFightModeBase>(GetWorld()->GetAuthGameMode());
-	//				if (tmp_mode)
-	//				{
-	//					if (this->GetNetOwningPlayer())
-	//						tmp_mode->registerDeath(this->GetNetOwningPlayer()->PlayerController);
-	//					else
-	//						tmp_mode->registerDeath(nullptr);
-	//				}
-	//				//HitComp->DestroyComponent();
-	//			}
-	//		}
+					AFightModeBase* tmp_mode = Cast<AFightModeBase>(GetWorld()->GetAuthGameMode());
+					if (tmp_mode)
+					{
+						if (this->GetNetOwningPlayer())
+							tmp_mode->registerDeath(this->GetNetOwningPlayer()->PlayerController);
+						else
+							tmp_mode->registerDeath(nullptr);
+					}
+					//HitComp->DestroyComponent();
+				}
+			}
 
-	//	}
-	//}
+		}
+	}
 }
 
 
@@ -830,6 +821,16 @@ void APhysicsFighter::updateLimbStates(FLimbNode* limb)
 	limb->state.up = limb->bi->GetUnrealWorldTransform().GetUnitAxis(EAxis::X);
 }
 
+void APhysicsFighter::updateArmLimbStates(FLimbNode* limb)
+{
+	limb->state.pos = limb->bi->GetUnrealWorldTransform().GetLocation();
+	//x and z axis are swapped
+	limb->state.forward = limb->bi->GetUnrealWorldTransform().GetUnitAxis(EAxis::X);
+	limb->state.right = limb->bi->GetUnrealWorldTransform().GetUnitAxis(EAxis::Y);
+	limb->state.prev_up = limb->state.up;
+	limb->state.up = limb->bi->GetUnrealWorldTransform().GetUnitAxis(EAxis::Z);
+}
+
 void APhysicsFighter::ControlLimb(float DeltaTime, FLimbNode* limb)
 {
 	limb->pid->error.X = 1.f - FVector::DotProduct(limb->target.dir, limb->state.up);
@@ -887,54 +888,58 @@ void APhysicsFighter::ControlLimb(float DeltaTime, FLimbNode* limb)
 	limb->bi->AddForceAtPosition(vel_axis*limb->pid->adjustment.Y, limb->state.pos + limb->state.up, false);
 	limb->bi->AddForceAtPosition(vel_axis*-limb->pid->adjustment.Y, limb->state.pos - limb->state.up, false);
 
-	limb->bi->AddTorque(limb->state.up*limb->pid->adjustment.Z, false);
+	limb->bi->AddTorque(limb->state.up*limb->pid->adjustment.Z, false, false);
 
 }
 
 
-void APhysicsFighter::ControlGripPhysics(float DeltaTime, FBodyInstance* BodyInstance)
+void APhysicsFighter::ControlArm(float DeltaTime, FBodyInstance* BodyInstance)
 {
-	customInitGripPhysics(DeltaTime, BodyInstance);
+	updateArmLimbStates(alr);
+	updateArmLimbStates(alr->next);
+
+	hand_solder_dir = alr->next->state.up - hand_solder;
+	if (hand_solder_dir.Size() > 0.5f)
+		hand_solder = hand_solder + hand_solder_dir*(0.5f / hand_solder_dir.Size());
+
+	hand_solder.Normalize();
+	hand_solder_dir.Normalize();
+
+
 	if (arm_states.disabled)
 	{
 		setDisabledStanceTargets();
-		ControlArmTwistPhysics(DeltaTime, BodyInstance);
-		ControlArmJointDirectionPhysics(DeltaTime, arm_BIs[1]);
-		ControlWeaponTwistPhysics(DeltaTime, BodyInstance);
+		ControlLimb(DeltaTime, alr->next);
 
 		if (UGameplayStatics::GetRealTimeSeconds(GetWorld()) - arm_states.disable_start > arm_states.disable_duration)
 		{
-			ControlArmJointDirectionPhysics(DeltaTime, arm_BIs[0]);
-			if (1.f - FVector::DotProduct(ajdc_targets[0].dir, abis[0].up) < 0.1f && FVector::Parallel(RS_3D, FVector::UpVector, 0.25f))
+			ControlLimb(DeltaTime, alr);
+			if (1.f - FVector::DotProduct(alr->target.dir, alr->state.up) < 0.1f && FVector::Parallel(RS_3D, FVector::UpVector, 0.25f))
 				arm_states.disabled = false;
 		}
 	}
 	else if (arm_states.guard_locked)
 	{
 		setGuardingStanceTargets();
-		ControlArmJointDirectionPhysics(DeltaTime, arm_BIs[0]);
-		ControlArmTwistPhysics(DeltaTime, BodyInstance);
+		ControlLimb(DeltaTime, alr);
+		ControlLimb(DeltaTime, alr->next);
 	}
 	else if (arm_states.guarding)
 	{
 		setGuardingStanceTargets();
-		ControlArmJointDirectionPhysics(DeltaTime, arm_BIs[0]);
-		ControlArmTwistPhysics(DeltaTime, BodyInstance);
-		ControlArmJointDirectionPhysics(DeltaTime, arm_BIs[1]);
-		if (!arm_states.guard_locked && (1.f - FVector::DotProduct(ajdc_targets[0].dir, ga_up)) < 0.01f && (1.f - FVector::DotProduct(ajdc_targets[1].dir, g_up)) < 0.01f && FMath::Abs(atc.error) < 0.01f)
+		ControlLimb(DeltaTime, alr);
+		ControlLimb(DeltaTime, alr->next);
+		/*if (!arm_states.guard_locked && (1.f - FVector::DotProduct(ajdc_targets[0].dir, ga_up)) < 0.01f && (1.f - FVector::DotProduct(ajdc_targets[1].dir, g_up)) < 0.01f && FMath::Abs(atc.error) < 0.01f)
 		{
 			lockGuard();
 			char_states.fight_stance = 2;
-		}
-		ControlWeaponTwistPhysics(DeltaTime, BodyInstance);
+		}*/
 	}
 	else
 	{
 		setNormalStanceTargets();
-		ControlArmJointDirectionPhysics(DeltaTime, arm_BIs[0]);
-		ControlArmTwistPhysics(DeltaTime, BodyInstance);
-		ControlArmJointDirectionPhysics(DeltaTime, arm_BIs[1]);
-		ControlWeaponTwistPhysics(DeltaTime, BodyInstance);
+		ControlLimb(DeltaTime, alr);
+		ControlLimb(DeltaTime, alr->next);
 
 		//Grip_h
 		FVector WPri = grip_attachment->ComponentToWorld.GetUnitAxis(EAxis::X);
@@ -954,351 +959,202 @@ void APhysicsFighter::ControlGripPhysics(float DeltaTime, FBodyInstance* BodyIns
 
 void APhysicsFighter::setNormalStanceTargets()
 {
-	if (!char_states.fight_mode) {
-		arm_states.extended = false;
-		ajdc_targets[1].dir = (-camera_axis->GetRightVector()*0.3f + camera_axis->GetForwardVector() + camera_axis->GetUpVector()*0.4f).GetSafeNormal();
-		ajdc_targets[0].dir = (camera_axis->GetRightVector() - camera_axis->GetUpVector()*0.3f + camera_axis->GetForwardVector()*0.4f).GetSafeNormal();
+	//twist
+	if (FVector::Parallel(alr->state.up, upbr.state.up, 0.95f)) {
+		alr->target.twist_dir = (upbr.state.forward - FVector::DotProduct(upbr.state.forward, alr->state.up)* alr->state.up).GetSafeNormal();
 	}
 	else {
-		ajdc_targets[1].dir = RS_3D;
-		if (ajdc_targets[1].dir_xy.IsNearlyZero()) {
-			ajdc_targets[1].dir_xy = ajdc_targets[1].prev_dir_xy;
-		}
-		else
-		{
-			ajdc_targets[1].prev_dir_xy = ajdc_targets[1].dir_xy;
-		}
+		alr->target.twist_dir = (upbr.state.up - FVector::DotProduct(upbr.state.up, alr->state.up)* alr->state.up).GetSafeNormal();
+	}
 
-		ajdc_targets[1].dir_xy = ajdc_targets[1].dir - FVector::DotProduct(ajdc_targets[1].dir, camera_axis->GetUpVector())*camera_axis->GetUpVector();
+	FVector tmp_twist = hand_solder_dir.GetSafeNormal();
+	tmp_twist = tmp_twist - FVector::DotProduct(tmp_twist, alr->next->state.up)*alr->next->state.up;
+	tmp_twist.Normalize();
 
-		ajdc_targets[0].dir = RS_3D;
-		ajdc_targets[0].dir_xy = ajdc_targets[0].dir - FVector::DotProduct(ajdc_targets[0].dir, camera_axis->GetUpVector())*camera_axis->GetUpVector();
+	float forward_error = 1.f - FVector::DotProduct(alr->next->state.forward, tmp_twist);
+	if (1.f - FVector::DotProduct(-alr->next->state.forward, tmp_twist) < forward_error)
+	{
+		alr->next->target.twist_dir = tmp_twist;
+		alr->next->state.forward = -alr->next->state.forward;
+	}
+	else
+	{
+		alr->next->target.twist_dir = tmp_twist;
+	}
+		
+	DrawDebugLine(
+		GetWorld(),
+		alr->next->state.pos,
+		alr->next->state.pos + alr->next->target.twist_dir*100.f,
+		FColor(255, 0, 0),
+		false, -1, 0,
+		3.f
+	);
+	DrawDebugLine(
+		GetWorld(),
+		alr->next->state.pos,
+		alr->next->state.pos + alr->next->state.forward*100.f,
+		FColor(0, 0, 255),
+		false, -1, 0,
+		3.f
+	);
+
+	
+	if (!char_states.fight_mode) {
+		//Direction
+		arm_states.extended = false;
+		alr->next->target.dir = (-camera_axis->GetRightVector()*0.3f + camera_axis->GetForwardVector() + camera_axis->GetUpVector()*0.4f).GetSafeNormal();
+		alr->target.dir = (camera_axis->GetRightVector() - camera_axis->GetUpVector()*0.3f + camera_axis->GetForwardVector()*0.4f).GetSafeNormal();
+	}
+	else {
+		//direction
+		alr->next->target.dir = RS_3D;
+		alr->target.dir = RS_3D;
+		
 	}
 }
 void APhysicsFighter::setGuardingStanceTargets()
 {
+
+	//twist
+	if (FVector::Parallel(alr->state.up, upbr.state.up, 0.95f)) {
+		alr->target.twist_dir = (upbr.state.forward - FVector::DotProduct(upbr.state.forward, alr->state.up)* alr->state.up).GetSafeNormal();
+	}
+	else {
+		alr->target.twist_dir = (upbr.state.up - FVector::DotProduct(upbr.state.up, alr->state.up)* alr->state.up).GetSafeNormal();
+	}
+
+	FVector tmp_twist = hand_solder_dir.GetSafeNormal();
+	tmp_twist = tmp_twist - FVector::DotProduct(tmp_twist, alr->next->state.up)*alr->next->state.up;
+	alr->next->target.twist_dir = tmp_twist.GetSafeNormal();
+
+	//directions
+	FVector camf = camera_axis->GetForwardVector();
+	FVector camu = camera_axis->GetUpVector();
 	if (!char_states.fight_mode) {
-		RS_3D = camera_axis->GetForwardVector();
-		arm_states.extended = false;
-		ajdc_targets[1].dir = RS_3D;
-		ajdc_targets[0].dir = RS_3D;
-
-		ajdc_targets[1].dir_xy = ajdc_targets[1].dir - FVector::DotProduct(ajdc_targets[1].dir, camera_axis->GetUpVector())*camera_axis->GetUpVector();
-
-		ajdc_targets[0].dir_xy = ajdc_targets[0].dir - FVector::DotProduct(ajdc_targets[0].dir, camera_axis->GetUpVector())*camera_axis->GetUpVector();
-		ajdc_targets[0].dir_xy.Normalize();
-
-		if (ajdc_targets[1].dir_xy.IsNearlyZero())
-			ajdc_targets[1].dir_xy = ajdc_targets[1].prev_dir_xy;
-
-		FVector guard_pos(FMath::Cos(PI / 2.8f), 0.f, FMath::Sin(PI / 2.8f));
-		guard_pos.Normalize();
-
-		float tmp_angle = FMath::Acos(FVector::DotProduct(ajdc_targets[1].dir_xy.GetSafeNormal(), FVector::ForwardVector))*180.f / PI;
-		if (FVector::CrossProduct(FVector::ForwardVector, ajdc_targets[1].dir_xy.GetSafeNormal()).Z < 0)
+		
+		float tmp_angle = FMath::Acos(FVector::DotProduct(camf, FVector::ForwardVector))*180.f / PI;
+		if (FVector::CrossProduct(FVector::ForwardVector, camf).Z < 0)
 			tmp_angle = -tmp_angle;
-		ajdc_targets[0].dir = guard_pos.RotateAngleAxis(tmp_angle, FVector::UpVector);
 
-		FVector guard_dir(FMath::Cos(-PI / 3.f), 0.f, FMath::Sin(-PI / 3.f));
-		guard_dir.Normalize();
-		ajdc_targets[1].dir = guard_dir.RotateAngleAxis(tmp_angle, FVector::UpVector);
+		arm_states.extended = false;
+		
+		FVector upper_arm_dir(FMath::Cos(PI / 4.f), 0.f, FMath::Sin(PI / 4.f));
+		upper_arm_dir.Normalize();
+		alr->target.dir = upper_arm_dir.RotateAngleAxis(tmp_angle, FVector::UpVector);
+
+		FVector hand_dir(FMath::Cos(-PI / 3.f), 0.f, FMath::Sin(-PI / 3.f));
+		hand_dir.Normalize();
+		alr->next->target.dir = hand_dir.RotateAngleAxis(tmp_angle, FVector::UpVector);
 	}
 	else {
 		arm_states.extended = false;
-		ajdc_targets[1].dir = RS_3D;
-		ajdc_targets[0].dir = RS_3D;
 
-		ajdc_targets[1].dir_xy = ajdc_targets[1].dir - FVector::DotProduct(ajdc_targets[1].dir, camera_axis->GetUpVector())*camera_axis->GetUpVector();
+		FVector tmp_xy = RS_3D - FVector::DotProduct(RS_3D, camu)*camu;
 
-		ajdc_targets[0].dir_xy = ajdc_targets[0].dir - FVector::DotProduct(ajdc_targets[1].dir, camera_axis->GetUpVector())*camera_axis->GetUpVector();
-		ajdc_targets[0].dir_xy.Normalize();
-
-		if (ajdc_targets[1].dir_xy.IsNearlyZero())
-			ajdc_targets[1].dir_xy = ajdc_targets[1].prev_dir_xy;
+		if (tmp_xy.IsNearlyZero(0.001f)){
+			tmp_xy = alr->target.prev_dir_xy;
+		}
+		else{
+			tmp_xy.Normalize();
+			alr->target.prev_dir_xy = tmp_xy;
+		}
+		float tmp_angle = FMath::Acos(FVector::DotProduct(tmp_xy, FVector::ForwardVector))*180.f / PI;
+		if (FVector::CrossProduct(FVector::ForwardVector, tmp_xy).Z < 0)
+			tmp_angle = -tmp_angle;
 
 		FVector guard_pos(FMath::Cos(PI / 2.8f), 0.f, FMath::Sin(PI / 2.8f));
 		guard_pos.Normalize();
+		alr->target.dir = guard_pos.RotateAngleAxis(tmp_angle, FVector::UpVector);
 
-		float tmp_angle = FMath::Acos(FVector::DotProduct(ajdc_targets[1].dir_xy.GetSafeNormal(), FVector::ForwardVector))*180.f / PI;
-		if (FVector::CrossProduct(FVector::ForwardVector, ajdc_targets[1].dir_xy.GetSafeNormal()).Z < 0)
-			tmp_angle = -tmp_angle;
-		ajdc_targets[0].dir = guard_pos.RotateAngleAxis(tmp_angle, FVector::UpVector);
+		FVector arm_xy = alr->state.up;
+		arm_xy.Z = 0.f; arm_xy.Normalize();
+		float arm_angle = FMath::Acos(FVector::DotProduct(arm_xy, FVector::ForwardVector))*180.f / PI;
+		if (FVector::CrossProduct(FVector::ForwardVector, arm_xy).Z < 0)
+			arm_angle = -arm_angle;
 
 		FVector guard_dir(FMath::Cos(-PI / 3.f), 0.f, FMath::Sin(-PI / 3.f));
 		guard_dir.Normalize();
-		ajdc_targets[1].dir = guard_dir.RotateAngleAxis(tmp_angle, FVector::UpVector);
+		alr->next->target.dir = guard_dir.RotateAngleAxis(arm_angle, FVector::UpVector);
 	}
 }
 
 void APhysicsFighter::setDisabledStanceTargets()
 {
 	arm_states.extended = false;
-	ajdc_targets[0].dir = FVector::UpVector;
-	ajdc_targets[1].dir = abis[0].up;
+	alr->target.dir = FVector::UpVector;
+	alr->next->target.dir = alr->state.up;
 }
-
-void APhysicsFighter::setArmTwistTargets()
-{
-	FVector ga_up_xy = ga_up;
-	ga_up_xy.Z = 0.f;
-	//ga_up_xy = ga_up_xy.GetSafeNormal(0.001f);
-	if (!ga_up_xy.IsNearlyZero(0.09f))
-	{
-		ga_up_xy.Normalize();
-		FVector projection_vector = (ga_forward - FVector::DotProduct(ga_forward, ga_up_xy)*ga_up_xy).GetSafeNormal();
-
-		ajdc_targets[0].twist_dir = projection_vector;
-		atc.error = 1.f - FVector::DotProduct(projection_vector, -FVector::UpVector);
-		if (FVector::DotProduct(ga_up_xy, FVector::CrossProduct(-FVector::UpVector, projection_vector).GetSafeNormal()) > 0.f)
-			ajdc_targets[0].twist_dir = -ajdc_targets[0].twist_dir;
-	}
-	else
-	{
-		FVector ga_forward_xy = ga_forward;
-		ga_forward_xy.Z = 0.f;
-		ga_forward_xy.Normalize();
-
-		atc.error = 1.f - FVector::DotProduct(ga_forward_xy, camera_axis->GetForwardVector());
-		if (FVector::CrossProduct(ga_forward_xy, camera_axis->GetForwardVector()).GetSafeNormal().Z < 0.f)
-			atc.error = -atc.error;
-	}
-}
-
-
-void APhysicsFighter::customInitGripPhysics(float DeltaTime, FBodyInstance* BodyInstance)
-{
-	//grip_axis_bi->SetBodyTransform(FTransform(torso_bi->GetCOMPosition() + FVector(0.f, 0.f, -15.f)), true);
-	ga_pos = arm_BIs[0]->GetUnrealWorldTransform().GetLocation();
-	ga_forward = arm_BIs[0]->GetUnrealWorldTransform().GetUnitAxis(EAxis::X);
-	ga_right = arm_BIs[0]->GetUnrealWorldTransform().GetUnitAxis(EAxis::Y);
-	ga_prev_up = ga_up;
-	ga_up = arm_BIs[0]->GetUnrealWorldTransform().GetUnitAxis(EAxis::Z);
-
-	g_pos = arm_BIs[1]->GetUnrealWorldTransform().GetLocation();
-	g_forward = arm_BIs[1]->GetUnrealWorldTransform().GetUnitAxis(EAxis::X);
-	g_right = arm_BIs[1]->GetUnrealWorldTransform().GetUnitAxis(EAxis::Y);
-	g_prev_up = g_up;
-	g_up = arm_BIs[1]->GetUnrealWorldTransform().GetUnitAxis(EAxis::Z);
-
-	for (int i = 0; i < arm_BIs.Num(); i++)
-	{
-
-		abis[i].pos = arm_BIs[i]->GetUnrealWorldTransform().GetLocation();
-		abis[i].forward = arm_BIs[i]->GetUnrealWorldTransform().GetUnitAxis(EAxis::X);
-		abis[i].right = arm_BIs[i]->GetUnrealWorldTransform().GetUnitAxis(EAxis::Y);
-		abis[i].prev_up = abis[i].up;
-		abis[i].up = arm_BIs[i]->GetUnrealWorldTransform().GetUnitAxis(EAxis::Z);
-
-	}
-
-}
-
-void APhysicsFighter::ControlArmJointDirectionPhysics(float DeltaTime, FBodyInstance* BodyInstance)
-{
-	//find joint index
-	int ji = arm_BIs.Num();
-	for (int i = 0; i < arm_BIs.Num(); i++) {
-		if (arm_BIs[i] == BodyInstance) {
-			ji = i;
-			break;
-		}
-	}
-
-	ajdc[ji].error.X = 1.f - FVector::DotProduct(ajdc_targets[ji].dir, abis[ji].up);
-	FVector rot_ref = FVector::CrossProduct(abis[ji].up, ajdc_targets[ji].dir);
-	rot_ref = rot_ref.GetSafeNormal();
-
-	//calculate rotational speed around rotation point
-	FVector vel_axis = (abis[ji].up - abis[ji].prev_up) / DeltaTime;
-	ajdc[ji].error.Y = -vel_axis.Size();
-	vel_axis = vel_axis.GetSafeNormal();
-
-	//Joint inertia around velocity and ref axis
-	float jvi = 0.f, jri = 0.f;
-	FMatrix joint_inertia;
-
-	for (int i = ji; i < arm_BIs.Num(); i++) {
-		calculateRelativeInertia(arm_BIs[i], abis[ji].pos, &joint_inertia);
-		jvi += inertiaAboutAxis(joint_inertia, FVector::CrossProduct(abis[ji].up, vel_axis).GetSafeNormal());
-		jri += inertiaAboutAxis(joint_inertia, rot_ref);
-	}
-
-	//calculate PID
-	ajdc[ji].error.X = ajdc[ji].error.X*(jri);
-	ajdc[ji].error.Y = ajdc[ji].error.Y*(jvi);
-
-	ajdc[ji].integral = ajdc[ji].integral + ajdc[ji].error * DeltaTime;
-	ajdc[ji].derivative = (ajdc[ji].error - ajdc[ji].prev_err) / DeltaTime;
-
-	ajdc[ji].adjustment = ajdc[ji].P * ajdc[ji].error +
-		ajdc[ji].I * ajdc[ji].integral +
-		ajdc[ji].D * ajdc[ji].derivative;
-	ajdc[ji].prev_err = ajdc[ji].error;
-
-
-	//apply pid adjusted forces
-	rot_ref = FVector::CrossProduct(rot_ref, abis[ji].up).GetSafeNormal();
-	arm_BIs[ji]->AddForceAtPosition(rot_ref*ajdc[ji].adjustment.X, abis[ji].pos + abis[ji].up, false);
-	arm_BIs[ji]->AddForceAtPosition(rot_ref*-ajdc[ji].adjustment.X, abis[ji].pos - abis[ji].up, false);
-
-	arm_BIs[ji]->AddForceAtPosition(vel_axis*ajdc[ji].adjustment.Y, abis[ji].pos + abis[ji].up, false);
-	arm_BIs[ji]->AddForceAtPosition(vel_axis*-ajdc[ji].adjustment.Y, abis[ji].pos - abis[ji].up, false);
-}
-
-void APhysicsFighter::ControlArmTwistPhysics(float DeltaTime, FBodyInstance* BodyInstance)
-{
-	FVector ga_up_xy = ga_up;
-	ga_up_xy.Z = 0.f;
-	//ga_up_xy = ga_up_xy.GetSafeNormal(0.001f);
-	if (!ga_up_xy.IsNearlyZero(0.09f))
-	{
-		ga_up_xy.Normalize();
-		FVector projection_vector = (ga_forward - FVector::DotProduct(ga_forward, ga_up_xy)*ga_up_xy).GetSafeNormal();
-
-		atc.error = 1.f - FVector::DotProduct(projection_vector, -FVector::UpVector);
-		if (FVector::DotProduct(ga_up_xy, FVector::CrossProduct(-FVector::UpVector, projection_vector).GetSafeNormal()) > 0.f)
-			atc.error = -atc.error;
-	}
-	else
-	{
-		FVector ga_forward_xy = ga_forward;
-		ga_forward_xy.Z = 0.f;
-		ga_forward_xy.Normalize();
-
-		atc.error = 1.f - FVector::DotProduct(ga_forward_xy, camera_axis->GetForwardVector());
-		if (FVector::CrossProduct(ga_forward_xy, camera_axis->GetForwardVector()).GetSafeNormal().Z < 0.f)
-			atc.error = -atc.error;
-	}
-
-
-
-	FMatrix grip_inertia;
-	calculateRelativeInertia(arm_BIs[1], ga_pos, &grip_inertia);
-	float gi_ref_i = inertiaAboutAxis(grip_inertia, ga_up);
-
-	//atc.error = atc.error*(gi_ref_i + grip_axis_bi->GetBodyInertiaTensor().Z);
-	//arm twist control error with inertia
-	float atcewi = atc.error*(gi_ref_i + arm_BIs[0]->GetBodyInertiaTensor().Z);
-
-	atc.integral = atc.integral + atcewi * DeltaTime;
-	atc.derivative = (atcewi - atc.prev_err) / DeltaTime;
-
-	atc.adjustment = atc.P * atcewi +
-		atc.I * atc.integral +
-		atc.D * atc.derivative;
-	atc.prev_err = atcewi;
-
-	arm_BIs[0]->AddTorque(ga_up*atc.adjustment, false);
-}
-
-void APhysicsFighter::ControlWeaponTwistPhysics(float DeltaTime, FBodyInstance* BodyInstance)
-{
-	FVector solder_dir = g_up - weapon_twist_solder;
-	if (solder_dir.Size() > 0.05f)
-	{
-		weapon_twist_target = solder_dir.GetSafeNormal();
-		weapon_twist_solder = weapon_twist_solder + solder_dir*(0.05f / solder_dir.Size());
-	}
-
-	weapon_twist_target = weapon_twist_target.GetSafeNormal() - FVector::DotProduct(weapon_twist_target.GetSafeNormal(), g_up)*g_up;
-	weapon_twist_target = weapon_twist_target.GetSafeNormal();
-
-	wtc.error = 1 - FVector::DotProduct(g_forward, weapon_twist_target);
-	float tmp_forward_angle_ref = 1 - FVector::DotProduct(-g_forward, weapon_twist_target);
-
-	if (tmp_forward_angle_ref < wtc.error)
-	{
-		wtc.error = tmp_forward_angle_ref;
-		g_forward = -g_forward;
-	}
-	FVector tmp_ref_vec = FVector::CrossProduct(g_forward, weapon_twist_target);
-
-	if (!FVector::Coincident(tmp_ref_vec, g_up, 0.0001f))
-		wtc.error = -wtc.error;
-
-	wtc.integral = wtc.integral + wtc.error * DeltaTime;
-	wtc.derivative = (wtc.error - wtc.prev_err) / DeltaTime;
-
-	wtc.adjustment = wtc.P * wtc.error +
-		wtc.I * wtc.integral +
-		wtc.D * wtc.derivative;
-	wtc.prev_err = wtc.error;
-
-	float tmp_inertia = arm_BIs[1]->GetBodyInertiaTensor().Z;
-	arm_BIs[1]->AddTorque(g_up*wtc.adjustment*tmp_inertia, false);
-
-}
-
 
 void APhysicsFighter::weaponGrabControl(float DeltaTime, FBodyInstance* BodyInstance)
 {
-	//FBodyInstance* tmp_shaft = held_weapon->getShaftComponent()->GetBodyInstance();
-	//w_prev_up = w_up;
-	//w_up = tmp_shaft->GetUnrealWorldTransform().GetUnitAxis(EAxis::Z);
-	//w_pos = tmp_shaft->GetUnrealWorldTransform().GetLocation();
-	//USceneComponent* tmp_attachment = held_weapon->getAttachmentPoint();
+	FBodyInstance* tmp_shaft = held_weapon->getShaftComponent()->GetBodyInstance();
+	gwep_states.prev_up = gwep_states.up;
+	gwep_states.up = tmp_shaft->GetUnrealWorldTransform().GetUnitAxis(EAxis::Z);
+	gwep_states.pos = tmp_shaft->GetUnrealWorldTransform().GetLocation();
+	USceneComponent* tmp_attachment = held_weapon->getAttachmentPoint();
 
-	//wgc.error = g_pos - tmp_attachment->GetComponentLocation();
+	wgc.error = alr->next->state.pos - tmp_attachment->GetComponentLocation();
 
-	////weapon position --------------------------------------------------------------
-	//wgc.integral = wgc.integral + wgc.error * DeltaTime;
-	//wgc.derivative = (wgc.error - wgc.prev_err) / DeltaTime;
+	//weapon position --------------------------------------------------------------
+	wgc.integral = wgc.integral + wgc.error * DeltaTime;
+	wgc.derivative = (wgc.error - wgc.prev_err) / DeltaTime;
 
-	//wgc.adjustment = wgc.P * wgc.error +
-	//	wgc.I * wgc.integral +
-	//	wgc.D * wgc.derivative;
-	//wgc.prev_err = wgc.error;
+	wgc.adjustment = wgc.P * wgc.error +
+		wgc.I * wgc.integral +
+		wgc.D * wgc.derivative;
+	wgc.prev_err = wgc.error;
 
-	//float mass = tmp_shaft->GetBodyMass();
-	////tmp_shaft->AddForceAtPosition(wgc.adjustment*(mass)/*+mass*980.f*FVector::UpVector*/, tmp_attachment->GetComponentLocation(), false);
-	//tmp_shaft->AddForce(wgc.adjustment*(mass), false);
-	//////weapon rotation --------------------------------------------------------------
-	//wgdc.error.X = 1.f - FVector::DotProduct(g_up, w_up);
-	//UE_LOG(LogTemp, Warning, TEXT("wgdc.error.X  %f"), wgdc.error.X);
-	//FVector rot_ref = FVector::CrossProduct(w_up, g_up);
-	//rot_ref = rot_ref.GetSafeNormal();
+	float mass = tmp_shaft->GetBodyMass();
+	//tmp_shaft->AddForceAtPosition(wgc.adjustment*(mass)/*+mass*980.f*FVector::UpVector*/, tmp_attachment->GetComponentLocation(), false);
+	tmp_shaft->AddForce(wgc.adjustment*(mass), false);
+	////weapon rotation --------------------------------------------------------------
+	wgdc.error.X = 1.f - FVector::DotProduct(alr->next->state.up, gwep_states.up);
+	UE_LOG(LogTemp, Warning, TEXT("wgdc.error.X  %f"), wgdc.error.X);
+	FVector rot_ref = FVector::CrossProduct(gwep_states.up, alr->next->state.up);
+	rot_ref = rot_ref.GetSafeNormal();
 
-	//if (wgc.error.Size() < 10.f && FMath::Abs(wgdc.error.X) < 0.1f)
+	if (wgc.error.Size() < 10.f && FMath::Abs(wgdc.error.X) < 0.1f)
+	{
+		held_weapon->getShaftComponent()->SetAngularDamping(0.0f);
+		held_weapon->getShaftComponent()->SetLinearDamping(0.01f);
+		attachWeapon(held_weapon);
+
+		arm_states.grabbing_weapon = false;
+	}
+
+	FVector vel_axis = (gwep_states.up - gwep_states.prev_up) / DeltaTime;
+	wgdc.error.Y = -vel_axis.Size();
+	vel_axis = vel_axis.GetSafeNormal();
+
+	FMatrix wep_inertia;
+	calculateRelativeInertia(tmp_shaft, gwep_states.pos, &wep_inertia);
+	float wi_ref_i = inertiaAboutAxis(wep_inertia, rot_ref);
+	float wi_va_i = inertiaAboutAxis(wep_inertia, FVector::CrossProduct(gwep_states.up, vel_axis).GetSafeNormal());
+
+	wgdc.error.X = wgdc.error.X*(wi_ref_i);
+	wgdc.error.Y = wgdc.error.Y*(wi_va_i);
+
+	wgdc.integral = wgdc.integral + wgdc.error * DeltaTime;
+	wgdc.derivative = (wgdc.error - wgdc.prev_err) / DeltaTime;
+
+	wgdc.adjustment = wgdc.P * wgdc.error +
+		wgdc.I * wgdc.integral +
+		wgdc.D * wgdc.derivative;
+	wgdc.prev_err = wgdc.error;
+
+	rot_ref = FVector::CrossProduct(rot_ref, gwep_states.up).GetSafeNormal();
+	tmp_shaft->AddForceAtPosition(rot_ref*wgdc.adjustment.X, gwep_states.pos + gwep_states.up, false);
+	tmp_shaft->AddForceAtPosition(rot_ref*-wgdc.adjustment.X, gwep_states.pos - gwep_states.up, false);
+
+	tmp_shaft->AddForceAtPosition(vel_axis*wgdc.adjustment.Y, gwep_states.pos + gwep_states.up, false);
+	tmp_shaft->AddForceAtPosition(vel_axis*-wgdc.adjustment.Y, gwep_states.pos - gwep_states.up, false);
+	//if (!grabbing_weapon)
 	//{
-	//	held_weapon->getShaftComponent()->SetAngularDamping(0.0f);
-	//	held_weapon->getShaftComponent()->SetLinearDamping(0.01f);
-	//	attachWeapon(held_weapon);
-
-	//	grabbing_weapon = false;
+	//	wgc.prev_err = FVector::ZeroVector;
+	//	wgrc.prev_err = 0.f;
+	//	wgic.prev_err = 0.f;
 	//}
-
-	//FVector vel_axis = (w_up - w_prev_up) / DeltaTime;
-	//wgdc.error.Y = -vel_axis.Size();
-	//vel_axis = vel_axis.GetSafeNormal();
-
-	//FMatrix wep_inertia;
-	//calculateRelativeInertia(tmp_shaft, w_pos, &wep_inertia);
-	//float wi_ref_i = inertiaAboutAxis(wep_inertia, rot_ref);
-	//float wi_va_i = inertiaAboutAxis(wep_inertia, FVector::CrossProduct(w_up, vel_axis).GetSafeNormal());
-
-	//wgdc.error.X = wgdc.error.X*(wi_ref_i);
-	//wgdc.error.Y = wgdc.error.Y*(wi_va_i);
-
-	//wgdc.integral = wgdc.integral + wgdc.error * DeltaTime;
-	//wgdc.derivative = (wgdc.error - wgdc.prev_err) / DeltaTime;
-
-	//wgdc.adjustment = wgdc.P * wgdc.error +
-	//	wgdc.I * wgdc.integral +
-	//	wgdc.D * wgdc.derivative;
-	//wgdc.prev_err = wgdc.error;
-
-	//rot_ref = FVector::CrossProduct(rot_ref, w_up).GetSafeNormal();
-	//tmp_shaft->AddForceAtPosition(rot_ref*wgdc.adjustment.X, w_pos + w_up, false);
-	//tmp_shaft->AddForceAtPosition(rot_ref*-wgdc.adjustment.X, w_pos - w_up, false);
-
-	//tmp_shaft->AddForceAtPosition(vel_axis*wgdc.adjustment.Y, w_pos + w_up, false);
-	//tmp_shaft->AddForceAtPosition(vel_axis*-wgdc.adjustment.Y, w_pos - w_up, false);
-	////if (!grabbing_weapon)
-	////{
-	////	wgc.prev_err = FVector::ZeroVector;
-	////	wgrc.prev_err = 0.f;
-	////	wgic.prev_err = 0.f;
-	////}
 
 }
 
@@ -1365,9 +1221,9 @@ void APhysicsFighter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 	InputComponent->BindAction("Guard", IE_Pressed, this, &APhysicsFighter::guard);
 	InputComponent->BindAction("Guard", IE_Released, this, &APhysicsFighter::abortGuard);
 
-	//InputComponent->BindAction("Grab", IE_Pressed, this, &APhysicsFighter::release);
-	//InputComponent->BindAction("Grab", IE_Repeat, this, &APhysicsFighter::grab);
-	//InputComponent->BindAction("Grab", IE_Released, this, &APhysicsFighter::abortGrab);
+	InputComponent->BindAction("Grab", IE_Pressed, this, &APhysicsFighter::release);
+	InputComponent->BindAction("Grab", IE_Repeat, this, &APhysicsFighter::grab);
+	InputComponent->BindAction("Grab", IE_Released, this, &APhysicsFighter::abortGrab);
 
 	InputComponent->BindAction("Jump", IE_Pressed, this, &APhysicsFighter::jump);
 
@@ -1401,6 +1257,8 @@ void APhysicsFighter::dash()
 		dash_data.force_timer = 0.f;
 		dash_trail->BeginTrails(FName("Spine01"), FName("Neck"), ETrailWidthMode::ETrailWidthMode_FromCentre, 1.0f);
 	}
+
+	//torsoBI->AddImpulse(target_direction*skeleton->GetMass()*13.f, true);
 }
 
 void APhysicsFighter::jump()
@@ -1466,119 +1324,120 @@ void APhysicsFighter::fightModeOff()
 }
 
 //TODO: WEAPON
-//void AJointCharacterTest::release()
-//{
-//	wep_extended = false;
-//	if (holding_weapon)
-//	{
-//		/*UE_LOG(LogTemp, Warning, TEXT("----------------------"));
-//		UE_LOG(LogTemp, Warning, TEXT("grip_vmass before unweld: %f"), grip_v_bi->GetBodyMass());
-//		UE_LOG(LogTemp, Warning, TEXT("grip_v inertia before unweld: %s"), *grip_v_bi->GetBodyInertiaTensor().ToString());*/
-//
-//		//wep_attachment->BreakConstraint();
-//		grip->UnWeldChildren();
-//		grip->UpdateBodySetup();
-//		held_weapon->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
-//		held_weapon->getShaftComponent()->SetSimulatePhysics(true);
-//		held_weapon->getShaftComponent()->SetPhysicsLinearVelocity(grip->GetPhysicsLinearVelocity());
-//		held_weapon->getShaftComponent()->SetPhysicsAngularVelocity(grip->GetPhysicsAngularVelocity());
-//		held_weapon->getShaftComponent()->SetAngularDamping(0.0f);
-//
-//		held_weapon->getShaftComponent()->SetEnableGravity(true);
-//
-//		held_weapon->deInitGrabbed();
-//
-//		holding_weapon = false;
-//		wep_extended = false;
-//
-//		/*UE_LOG(LogTemp, Warning, TEXT("----------------------"));*/
-//		grip_indicator_beam->SetVisibility(true);
-//		grip_indicator_decal->SetVisibility(true);
-//		return;
-//	}
-//	else if (holding_object)
-//	{
-//		grip_indicator_beam->SetVisibility(true);
-//		grip_indicator_decal->SetVisibility(true);
-//		/*grip->UnWeldChildren();
-//		grip->UpdateBodySetup();*/
-//		holding_object = false;
-//		return;
-//	}
-//
-//}
-//
-//void AJointCharacterTest::grab()
-//{
-//	if (!grabbing_weapon && !holding_weapon)
-//	{
-//		//TSet<AActor*> overlaps;
-//		//grip->GetOverlappingActors(overlaps);
-//
-//		TArray<FHitResult> traces;
-//		FCollisionQueryParams RV_TraceParams = FCollisionQueryParams(FName(TEXT("RV_Trace")), true, this);
-//		RV_TraceParams.bTraceComplex = false;
-//		RV_TraceParams.bTraceAsyncScene = true;
-//		RV_TraceParams.bReturnPhysicalMaterial = false;
-//
-//		//GetWorld()->LineTraceMultiByChannel(traces, grip->GetComponentLocation() + FVector::UpVector*150.f, grip->GetComponentLocation() - FVector::UpVector*300.f, ECollisionChannel::ECC_PhysicsBody, RV_TraceParams);
-//		GetWorld()->SweepMultiByProfile(traces, grip->GetComponentLocation() + FVector::UpVector*150.f, grip->GetComponentLocation() - FVector::UpVector*300.f, FQuat(), FName("GrabbableObjects"), FCollisionShape::MakeSphere(20.f), RV_TraceParams);
-//
-//		//GetWorld()->SweepMultiByChannel(traces, grip->GetComponentLocation() + FVector::UpVector*150.f, grip->GetComponentLocation() - FVector::UpVector*300.f, FQuat(), ECollisionChannel::ECC_PhysicsBody, FCollisionShape::MakeSphere(grip->GetUnscaledSphereRadius()), RV_TraceParams);
-//		if (traces.Num() > 0)
-//		{
-//			held_weapon = dynamic_cast<AWeapon*>(traces[0].GetActor());
-//			if (held_weapon)
-//			{
-//				grabbing_weapon = true;
-//				held_weapon->getShaftComponent()->SetEnableGravity(false);
-//				held_weapon->getShaftComponent()->SetAngularDamping(2.0f);
-//				//held_weapon->getShaftComponent()->SetAngularDamping(1.0f);
-//				//held_weapon->getShaftComponent()->SetLinearDamping(1.0f);
-//			}
-//		}
-//	}
-//}
-//
-//void AJointCharacterTest::attachWeapon(AWeapon* _wep)
-//{
-//	// if attachWeapon was called outside of weapongrabcontrol, for example from a blueprint
-//	held_weapon = _wep;
-//
-//	UCapsuleComponent* tmp_shaft = dynamic_cast<UCapsuleComponent*>(held_weapon->GetRootComponent());
-//	tmp_shaft->SetSimulatePhysics(false);
-//	tmp_shaft->SetAngularDamping(0.0f);
-//	USceneComponent* tmp_handle = dynamic_cast<USceneComponent*>(held_weapon->GetComponentsByTag(USceneComponent::StaticClass(), "handle_point").Top());
-//	held_weapon->SetActorRotation(grip->GetComponentRotation());
-//
-//	FVector handle_offset = held_weapon->GetActorLocation() - tmp_handle->GetComponentLocation();
-//	held_weapon->SetActorLocation(grip->GetComponentLocation() + (handle_offset));
-//
-//	//wep_attachment->ConstraintActor2 = held_weapon;
-//	//wep_attachment->SetConstrainedComponents(grip, NAME_None, tmp_shaft, NAME_None);
-//	held_weapon->AttachRootComponentTo(grip, NAME_None, EAttachLocation::KeepWorldPosition, true);
-//	grip->UpdateBodySetup();
-//
-//	object_attach_audio->Activate();
-//
-//	grip_indicator_beam->SetVisibility(false);
-//	grip_indicator_decal->SetVisibility(false);
-//
-//	w_up = FVector::ZeroVector;
-//
-//	holding_weapon = true;
-//	wep_extended = false;
-//	held_weapon->initGrabbed(this);
-//}
-//
-//
-//void AJointCharacterTest::abortGrab()
-//{
-//	if (grabbing_weapon)
-//	{
-//		held_weapon->getShaftComponent()->SetEnableGravity(true);
-//		held_weapon = nullptr;
-//		grabbing_weapon = false;
-//	}
-//
-//}
+void APhysicsFighter::release()
+{
+	arm_states.extended = false;
+	if (arm_states.holding_weapon)
+	{
+		/*UE_LOG(LogTemp, Warning, TEXT("----------------------"));
+		UE_LOG(LogTemp, Warning, TEXT("grip_vmass before unweld: %f"), grip_v_bi->GetBodyMass());
+		UE_LOG(LogTemp, Warning, TEXT("grip_v inertia before unweld: %s"), *grip_v_bi->GetBodyInertiaTensor().ToString());*/
+
+		//wep_attachment->BreakConstraint();
+		grip->UnWeldChildren();
+		grip->UpdateBodySetup();
+		held_weapon->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+		held_weapon->getShaftComponent()->SetSimulatePhysics(true);
+		held_weapon->getShaftComponent()->SetPhysicsLinearVelocity(grip->GetPhysicsLinearVelocity());
+		held_weapon->getShaftComponent()->SetPhysicsAngularVelocity(grip->GetPhysicsAngularVelocity());
+		held_weapon->getShaftComponent()->SetAngularDamping(0.0f);
+
+		held_weapon->getShaftComponent()->SetEnableGravity(true);
+
+		held_weapon->deInitGrabbed();
+
+		arm_states.holding_weapon = false;
+		arm_states.extended = false;
+
+		/*UE_LOG(LogTemp, Warning, TEXT("----------------------"));*/
+		grip_indicator_beam->SetVisibility(true);
+		grip_indicator_decal->SetVisibility(true);
+		return;
+	}
+	else if (arm_states.holding_object)
+	{
+		grip_indicator_beam->SetVisibility(true);
+		grip_indicator_decal->SetVisibility(true);
+		/*grip->UnWeldChildren();
+		grip->UpdateBodySetup();*/
+		arm_states.holding_object = false;
+		return;
+	}
+
+}
+
+void APhysicsFighter::grab()
+{
+	if (!arm_states.grabbing_weapon && !arm_states.holding_weapon)
+	{
+		//TSet<AActor*> overlaps;
+		//grip->GetOverlappingActors(overlaps);
+
+		TArray<FHitResult> traces;
+		FCollisionQueryParams RV_TraceParams = FCollisionQueryParams(FName(TEXT("RV_Trace")), true, this);
+		RV_TraceParams.bTraceComplex = false;
+		RV_TraceParams.bTraceAsyncScene = true;
+		RV_TraceParams.bReturnPhysicalMaterial = false;
+
+		//GetWorld()->LineTraceMultiByChannel(traces, grip->GetComponentLocation() + FVector::UpVector*150.f, grip->GetComponentLocation() - FVector::UpVector*300.f, ECollisionChannel::ECC_PhysicsBody, RV_TraceParams);
+		GetWorld()->SweepMultiByProfile(traces, grip->GetComponentLocation() + FVector::UpVector*150.f, grip->GetComponentLocation() - FVector::UpVector*300.f, FQuat(), FName("GrabbableObjects"), FCollisionShape::MakeSphere(20.f), RV_TraceParams);
+
+		//GetWorld()->SweepMultiByChannel(traces, grip->GetComponentLocation() + FVector::UpVector*150.f, grip->GetComponentLocation() - FVector::UpVector*300.f, FQuat(), ECollisionChannel::ECC_PhysicsBody, FCollisionShape::MakeSphere(grip->GetUnscaledSphereRadius()), RV_TraceParams);
+		if (traces.Num() > 0)
+		{
+			held_weapon = dynamic_cast<AWeapon*>(traces[0].GetActor());
+			if (held_weapon)
+			{
+				arm_states.grabbing_weapon = true;
+				held_weapon->getShaftComponent()->SetEnableGravity(false);
+				held_weapon->getShaftComponent()->SetAngularDamping(2.0f);
+				//held_weapon->getShaftComponent()->SetAngularDamping(1.0f);
+				//held_weapon->getShaftComponent()->SetLinearDamping(1.0f);
+			}
+		}
+	}
+}
+
+void APhysicsFighter::attachWeapon(AWeapon* _wep)
+{
+	// if attachWeapon was called outside of weapongrabcontrol, for example from a blueprint
+	held_weapon = _wep;
+
+	UCapsuleComponent* tmp_shaft = held_weapon->getShaftComponent();
+	tmp_shaft->SetSimulatePhysics(false);
+	tmp_shaft->SetAngularDamping(0.0f);
+	USceneComponent* tmp_handle = held_weapon->getAttachmentPoint();
+	held_weapon->SetActorRotation(grip->GetComponentRotation());
+
+	FVector handle_offset = held_weapon->GetActorLocation() - tmp_handle->GetComponentLocation();
+	held_weapon->SetActorLocation(grip->GetComponentLocation() + (handle_offset));
+
+	//wep_attachment->ConstraintActor2 = held_weapon;
+	//wep_attachment->SetConstrainedComponents(grip, NAME_None, tmp_shaft, NAME_None);
+	FAttachmentTransformRules wep_attach_rules(EAttachmentRule::KeepWorld,true);
+	held_weapon->AttachToComponent(grip, wep_attach_rules, NAME_None);
+	grip->UpdateBodySetup();
+
+	object_attach_audio->Activate();
+
+	grip_indicator_beam->SetVisibility(false);
+	grip_indicator_decal->SetVisibility(false);
+
+	gwep_states.up = FVector::ZeroVector;
+
+	arm_states.holding_weapon = true;
+	arm_states.extended = false;
+	held_weapon->initGrabbed(this);
+}
+
+
+void APhysicsFighter::abortGrab()
+{
+	if (arm_states.grabbing_weapon)
+	{
+		held_weapon->getShaftComponent()->SetEnableGravity(true);
+		held_weapon = nullptr;
+		arm_states.grabbing_weapon = false;
+	}
+
+}
