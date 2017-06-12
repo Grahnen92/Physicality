@@ -156,6 +156,11 @@ USTRUCT(BlueprintType)
 struct FPFJump
 {
 	GENERATED_USTRUCT_BODY()
+
+	bool ready = true;
+	float cd = 1.5f;
+	float cd_timer = 1.5f;
+
 	bool jumping;
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	float height = 100;
@@ -171,12 +176,15 @@ USTRUCT(BlueprintType)
 struct FPFDash
 {
 	GENERATED_USTRUCT_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	bool ready = true;
+	float cd = 1.5f;
+	float cd_timer = 0.0f;
+
 	bool dashing = false;
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	float speed = 50000;
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	float cd = 1.5f;
-	float cd_timer = 0.0f;
 	float force;
 	float force_time = 0.1f;
 	float force_timer = 0.f;
@@ -335,6 +343,7 @@ protected:
 public:	
 	// Called every frame
 	virtual void Tick(float DeltaTime) override;
+	void tickCDs(float DeltaTime);
 	// Called to bind functionality to input
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 

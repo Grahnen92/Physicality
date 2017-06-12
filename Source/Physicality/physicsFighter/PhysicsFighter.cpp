@@ -287,11 +287,31 @@ void APhysicsFighter::Tick(float DeltaTime)
 		torsoBI->AddCustomPhysics(CalculateControlBody); //TODO: this function makes PhysicsCharacter despawn when build is packaged
 		torsoBI->AddCustomPhysics(OnCalculateCustomHoverPhysics);
 		
+		tickCDs(DeltaTime);
+
 		if (char_states.can_move)
 			movementCalculations(DeltaTime);
 		
 		if (!arm_states.holding_weapon)
 			gripIndicatorCalculations(DeltaTime);
+
+	}
+}
+
+void APhysicsFighter::tickCDs(float DeltaTime)
+{
+	if (!jump_data.ready)
+	{
+		jump_data.cd_timer += DeltaTime;
+		if (jump_data.cd_timer >= jump_data.cd)
+			jump_data.ready = true;
+	}
+
+	if (!dash_data.ready)
+	{
+		dash_data.cd_timer += DeltaTime;
+		if (dash_data.cd_timer >= dash_data.cd)
+			dash_data.ready = true;
 	}
 }
 
@@ -392,22 +412,16 @@ void APhysicsFighter::movementCalculations(float DeltaTime)
 		if (dash_data.force_timer == 0.f) {//the factor of 100 is because unreal apparently applies forces in kg*cm*s^(-2)
 			dash_data.force = (skeleton->GetMass()*dash_data.speed - skeleton->GetMass()*curr_vel2D.Size()) / dash_data.force_time;
 		}
-		if (dash_data.force_timer < dash_data.force_time) {
-			torsoBI->AddForce(target_direction*dash_data.force*DeltaTime);
-			dash_data.force_timer += DeltaTime;
-		}
-		else
-		{
 
-		}
+		torsoBI->AddForce(target_direction*dash_data.force*DeltaTime);
+		dash_data.force_timer += DeltaTime;
 
-		dash_data.cd_timer += DeltaTime;
-		dash_trail->SetFloatParameter(FName("trailLifetime"), FMath::Lerp(1.0f, 0.0f, dash_data.cd_timer / dash_data.cd));
 
-		if (dash_data.cd_timer > dash_data.cd) {
+		dash_trail->SetFloatParameter(FName("trailLifetime"), FMath::Lerp(1.0f, 0.0f, dash_data.force_timer / dash_data.force_time));
+
+		if (dash_data.force_timer > dash_data.force_time) {
 			dash_data.dashing = false;
 			dash_data.force_timer = 0.0f;
-			dash_data.cd_timer = 0.0f;
 			dash_trail->EndTrails();
 		}
 	}
@@ -1251,11 +1265,14 @@ void APhysicsFighter::LSY(float AxisValue)
 
 void APhysicsFighter::dash()
 {
-	if (!dash_data.dashing)
+	if (dash_data.ready)
 	{
 		dash_data.dashing = true;
 		dash_data.force_timer = 0.f;
 		dash_trail->BeginTrails(FName("Spine01"), FName("Neck"), ETrailWidthMode::ETrailWidthMode_FromCentre, 1.0f);
+		
+		dash_data.cd_timer = 0.f;
+		dash_data.ready = false;
 	}
 
 	//torsoBI->AddImpulse(target_direction*skeleton->GetMass()*13.f, true);
@@ -1263,8 +1280,14 @@ void APhysicsFighter::dash()
 
 void APhysicsFighter::jump()
 {
-	jump_data.jumping = true;
-	jump_data.curr_jump_time = 0.0f;
+	if (jump_data.ready)
+	{
+		jump_data.jumping = true;
+		jump_data.curr_jump_time = 0.0f;
+
+		jump_data.cd_timer = 0.f;
+		jump_data.ready = false;
+	}
 }
 
 void APhysicsFighter::RSY(float AxisValue)
