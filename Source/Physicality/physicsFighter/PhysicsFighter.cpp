@@ -361,11 +361,11 @@ void APhysicsFighter::cameraCalculations(float DeltaTime)
 
 
 		FRotator axis_rotation = camera_axis->GetComponentRotation();
-		axis_rotation.Yaw += RS.X*2.0f;
+		axis_rotation.Yaw += RS.X*150.f*DeltaTime;
 		camera_axis->SetWorldRotation(axis_rotation);
 
 		FRotator arm_rotation = camera_spring_arm->GetComponentRotation();
-		arm_rotation.Pitch = FMath::Clamp(arm_rotation.Pitch + RS.Y*2.0f, -80.0f, 80.0f);
+		arm_rotation.Pitch = FMath::Clamp(arm_rotation.Pitch + RS.Y*150.f*DeltaTime, -80.0f, 80.0f);
 		camera_spring_arm->SetWorldRotation(arm_rotation);
 
 	}
@@ -409,37 +409,46 @@ void APhysicsFighter::movementCalculations(float DeltaTime)
 	//dashing -------------------------------------------------------------------------------------
 
 	if (dash_data.dashing) {
-		if (dash_data.force_timer == 0.f) {//the factor of 100 is because unreal apparently applies forces in kg*cm*s^(-2)
-			dash_data.force = (skeleton->GetMass()*dash_data.speed - skeleton->GetMass()*curr_vel2D.Size()) / dash_data.force_time;
-		}
+		//if (dash_data.force_timer == 0.f) {//the factor of 100 is because unreal apparently applies forces in kg*cm*s^(-2)
+		//	dash_data.force = (skeleton->GetMass()*dash_data.speed - skeleton->GetMass()*curr_vel2D.Size()) / dash_data.force_time;
+		//}
 
-		torsoBI->AddForce(target_direction*dash_data.force*DeltaTime);
-		dash_data.force_timer += DeltaTime;
-
-
-		dash_trail->SetFloatParameter(FName("trailLifetime"), FMath::Lerp(1.0f, 0.0f, dash_data.force_timer / dash_data.force_time));
-
-		if (dash_data.force_timer > dash_data.force_time) {
-			dash_data.dashing = false;
-			dash_data.force_timer = 0.0f;
-			dash_trail->EndTrails();
-		}
+		//dash_trail->SetFloatParameter(FName("trailLifetime"), FMath::Lerp(1.0f, 0.0f, dash_data.force_timer / dash_data.force_time));
+		//
+		//if (dash_data.force_timer + DeltaTime > dash_data.force_time) {
+		//	torsoBI->AddForce(target_direction*dash_data.force*(dash_data.force_time - dash_data.force_timer));
+		//	dash_data.dashing = false;
+		//	dash_data.force_timer = 0.0f;
+		//	dash_trail->EndTrails();
+		//}
+		//else
+		//{
+		//	dash_data.force_timer += DeltaTime;
+		//	torsoBI->AddForce(target_direction*dash_data.force*DeltaTime);
+		//}
+		torsoBI->AddImpulse(target_direction*1900.f,true);
+		dash_data.dashing = false;
 	}
 
 	//Jumping -------------------------------------------------------------------------------------
 
 	if (jump_data.jumping) {
-		if (jump_data.curr_jump_time == 0.f) {//the factor of 100 is because unreal apparently applies forces in kg*cm*s^(-2)
-			jump_data.force = (((FMath::Sqrt(2.f*1000.f*jump_data.height) - torsoBI->GetUnrealWorldVelocity().Z) / jump_data.force_time) + 1000.f)*(skeleton->GetMass()) * 100.f;
-		}
+		//if (jump_data.curr_jump_time == 0.f) {//the factor of 100 is because unreal apparently applies forces in kg*cm*s^(-2)
+		//	jump_data.force = (((FMath::Sqrt(2.f*1000.f*jump_data.height) - torsoBI->GetUnrealWorldVelocity().Z) / jump_data.force_time) + 1000.f)*(skeleton->GetMass()) * 100.f;
+		//}
 
-		torsoBI->AddForce(FVector::UpVector*jump_data.force*DeltaTime);
-
-		jump_data.curr_jump_time += DeltaTime;
-		if (jump_data.curr_jump_time > jump_data.force_time) {
-			jump_data.jumping = false;
-			jump_data.curr_jump_time = 0.0f;
-		}
+		//if (jump_data.curr_jump_time + DeltaTime > jump_data.force_time) {
+		//	torsoBI->AddForce(FVector::UpVector*jump_data.force*(jump_data.force_time - jump_data.curr_jump_time));
+		//	jump_data.jumping = false;
+		//	jump_data.curr_jump_time = 0.0f;
+		//}
+		//else
+		//{
+		//	torsoBI->AddForce(FVector::UpVector*jump_data.force*DeltaTime);
+		//	jump_data.curr_jump_time += DeltaTime;
+		//}
+		torsoBI->AddImpulse(FVector::UpVector*1500.f, true);
+		jump_data.jumping = false;
 	}
 }
 
@@ -1269,7 +1278,7 @@ void APhysicsFighter::dash()
 	{
 		dash_data.dashing = true;
 		dash_data.force_timer = 0.f;
-		dash_trail->BeginTrails(FName("Spine01"), FName("Neck"), ETrailWidthMode::ETrailWidthMode_FromCentre, 1.0f);
+		//dash_trail->BeginTrails(FName("Spine01"), FName("Neck"), ETrailWidthMode::ETrailWidthMode_FromCentre, 1.0f);
 		
 		dash_data.cd_timer = 0.f;
 		dash_data.ready = false;
