@@ -120,6 +120,8 @@ struct FLimbNode
 	FPIDData3D* pid;
 	FLimbTarget target;
 
+	FPIDData* twist_pid;
+
 };
 
 USTRUCT(BlueprintType)
@@ -388,7 +390,11 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ArmPID")
 	FPIDData3D upper_arm_controller;
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ArmPID")
+	FPIDData upper_arm_twist_controller;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ArmPID")
 	FPIDData3D hand_controller;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ArmPID")
+	FPIDData hand_twist_controller;
 
 	//weapon_grab_direction_controller
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
@@ -485,6 +491,7 @@ protected:
 	void updateLimbStates(FLimbNode* limb);
 	void updateArmLimbStates(FLimbNode* limb);
 	void ControlLimb(float DeltaTime, FLimbNode* limb);
+	void ControlLimbTwist(float DeltaTime, FLimbNode* limb);
 
 	void controlCameraDirection(float DeltaTime);
 

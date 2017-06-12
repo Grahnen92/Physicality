@@ -213,10 +213,12 @@ void APhysicsFighter::initCustomPhysics()
 	alr = new FLimbNode;
 	alr->bi = grip_axis->GetBodyInstance();
 	alr->pid = &upper_arm_controller;
+	alr->twist_pid = &upper_arm_twist_controller;
 	//torso
 	alr->next = new FLimbNode;
 	alr->next->bi = grip->GetBodyInstance();
 	alr->next->pid = &hand_controller;
+	alr->next->twist_pid = &hand_twist_controller;
 	alr->next->next = nullptr;
 
 	//pelvis
@@ -915,6 +917,28 @@ void APhysicsFighter::ControlLimb(float DeltaTime, FLimbNode* limb)
 
 }
 
+void APhysicsFighter::ControlLimbTwist(float DeltaTime, FLimbNode* limb)
+{
+	
+	FVector local_vel = limb->bi->GetUnrealWorldTransform().InverseTransformVector(limb->bi->GetUnrealWorldAngularVelocity());
+	//UE_LOG(LogTemp, Warning, TEXT("local vel: %s"), *local_vel.ToString());
+
+	float lui = limb->bi->GetBodyInertiaTensor().Z;
+	limb->twist_pid->error = -local_vel.Z*lui;
+
+
+	limb->twist_pid->integral = limb->twist_pid->integral + limb->twist_pid->error * DeltaTime;
+	limb->twist_pid->derivative = (limb->twist_pid->error - limb->twist_pid->prev_err) / DeltaTime;
+
+	limb->twist_pid->adjustment = limb->twist_pid->P * limb->twist_pid->error +
+		limb->twist_pid->I * limb->twist_pid->integral +
+		limb->twist_pid->D * limb->twist_pid->derivative;
+	limb->twist_pid->prev_err = limb->twist_pid->error;
+
+	limb->bi->AddTorque(limb->state.up*limb->twist_pid->adjustment, false, false);
+
+}
+
 
 void APhysicsFighter::ControlArm(float DeltaTime, FBodyInstance* BodyInstance)
 {
@@ -962,7 +986,9 @@ void APhysicsFighter::ControlArm(float DeltaTime, FBodyInstance* BodyInstance)
 	{
 		setNormalStanceTargets();
 		ControlLimb(DeltaTime, alr);
+		ControlLimbTwist(DeltaTime, alr);
 		ControlLimb(DeltaTime, alr->next);
+		ControlLimbTwist(DeltaTime, alr->next);
 
 		//Grip_h
 		FVector WPri = grip_attachment->ComponentToWorld.GetUnitAxis(EAxis::X);
@@ -1047,9 +1073,13 @@ void APhysicsFighter::setGuardingStanceTargets()
 		alr->target.twist_dir = (upbr.state.up - FVector::DotProduct(upbr.state.up, alr->state.up)* alr->state.up).GetSafeNormal();
 	}
 
-	FVector tmp_twist = hand_solder_dir.GetSafeNormal();
+	/*FVector tmp_twist = hand_solder_dir.GetSafeNormal();
 	tmp_twist = tmp_twist - FVector::DotProduct(tmp_twist, alr->next->state.up)*alr->next->state.up;
-	alr->next->target.twist_dir = tmp_twist.GetSafeNormal();
+	alr->next->target.twist_dir = tmp_twist.GetSafeNormal();*/
+	FVector tmp_twist = alr->state.up;
+	tmp_twist = tmp_twist - FVector::DotProduct(tmp_twist, alr->next->state.up)*alr->next->state.up;
+	tmp_twist = tmp_twist.GetSafeNormal();
+	alr->next->target.twist_dir = tmp_twist.RotateAngleAxis(90.f, alr->next->state.up);
 
 	//directions
 	FVector camf = camera_axis->GetForwardVector();
